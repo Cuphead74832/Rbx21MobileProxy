@@ -1,28 +1,37 @@
 import base64
+import datetime
 import http.client
+import ipaddress
 import json
 import os
 import re
 import secrets
 import ssl
 import sys
+import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.x509.oid import NameOID
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_DIR = os.path.join(BASE_DIR, "json")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets", "places")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.txt")
 KEY_PATH = os.path.join(BASE_DIR, "privatekey.pem")
+CERT_PATH = os.path.join(BASE_DIR, "cert.pem")
+TLS_KEY_PATH = os.path.join(BASE_DIR, "cert.key")
 
 CONFIG_KEYS = [
     ("host", "0.0.0.0"),
-    ("port", "8081"),
+    ("port", "80"),
+    ("https_port", "443"),
+    ("mitm_port", "8081"),
     ("base_url", "http://www.roblox.com"),
     ("api_base_url", "http://api.roblox.com"),
     ("machine_address", "127.0.0.1"),
@@ -134,6 +143,74 @@ def load_config():
 def load_key():
     with open(KEY_PATH, "rb") as f:
         return serialization.load_pem_private_key(f.read(), password=None)
+
+
+def ensure_tls_files():
+    if os.path.isfile(CERT_PATH) and os.path.isfile(TLS_KEY_PATH):
+        return
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.datetime.utcnow()
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "www.roblox.com")])
+    san = x509.SubjectAlternativeName([
+        x509.DNSName("www.roblox.com"),
+        x509.DNSName("roblox.com"),
+        x509.DNSName("*.roblox.com"),
+        x509.DNSName("api.roblox.com"),
+        x509.DNSName("uploads.roblox.com"),
+        x509.DNSName("assetdelivery.roblox.com"),
+        x509.DNSName("games.roblox.com"),
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(san, critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(
+            digital_signature=True,
+            content_commitment=False,
+            key_encipherment=True,
+            data_encipherment=False,
+            key_agreement=False,
+            key_cert_sign=True,
+            crl_sign=True,
+            encipher_only=None,
+            decipher_only=None,
+        ), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([
+            x509.ExtendedKeyUsageOID.SERVER_AUTH,
+            x509.ExtendedKeyUsageOID.CLIENT_AUTH,
+        ]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    with open(TLS_KEY_PATH, "wb") as f:
+        f.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ))
+    with open(CERT_PATH, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+
+def build_tls_context():
+    for _ in range(2):
+        ensure_tls_files()
+        try:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(CERT_PATH, TLS_KEY_PATH)
+            return context
+        except Exception:
+            for path in (CERT_PATH, TLS_KEY_PATH):
+                if os.path.exists(path):
+                    os.remove(path)
+    raise ConnectionError("could not create TLS certificate")
 
 
 def now_string():
@@ -368,7 +445,7 @@ class Server(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Rbx21MobileProxy"
-    protocol_version = "HTTP/1.0"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
@@ -378,6 +455,9 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             return b""
         return self.rfile.read(length)
+
+    def auth_cookie(self):
+        return self.cookie_value(".PUPPYSECURITY") or self.cookie_value("PUPPYSECURITY")
 
     def fetch_upstream(self, base, method, target, data):
         parsed = urlparse(base)
@@ -441,8 +521,16 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in (extra_headers or []):
             self.send_header(key, value)
         self.end_headers()
-        if data:
+        if data and self.command != "HEAD":
             self.wfile.write(data)
+
+    def drain_body(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > 0:
+            try:
+                self.rfile.read(length)
+            except Exception:
+                pass
 
     def send_json(self, obj, status=200, extra_headers=None):
         if isinstance(obj, str):
@@ -474,6 +562,23 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.handle_request()
 
+    def do_HEAD(self):
+        self.handle_request()
+
+    def do_PUT(self):
+        self.handle_request()
+
+    def do_DELETE(self):
+        self.handle_request()
+
+    def do_PATCH(self):
+        self.handle_request()
+
+    def do_OPTIONS(self):
+        self.handle_request()
+
+    BODY_CONSUMING = ("/v1/join-game", "/asset", "/v1/asset", "/v1/settings/application", "/v2/get-rollout-settings")
+
     def handle_request(self):
         cfg = self.server.cfg
         key = self.server.key
@@ -489,6 +594,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         path = path.rstrip("/") if path != "/" else path
         query = parsed.query
+        if self.command in ("POST", "PUT", "PATCH") and path not in self.BODY_CONSUMING:
+            self.drain_body()
         user_id = cfg["fake_user_id"]
         username = cfg["fake_username"]
         display_name = cfg["fake_display_name"]
@@ -521,9 +628,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(body)
             return
 
+        if path == "/notifications/signalr/negotiate":
+            self.send_json({
+                "Url": base_url + "/notifications/signalr",
+                "ConnectionToken": b64url(secrets.token_bytes(48)),
+                "ConnectionId": str(uuid.uuid4()) + "-UserNotificationHub",
+                "KeepAliveTimeout": 20.0,
+                "DisconnectTimeout": 30.0,
+                "ConnectionTimeout": 110.0,
+                "TryWebSockets": True,
+                "ProtocolVersion": "1.4",
+                "TransportConnectTimeout": 5.0,
+                "LongPollDelay": 0.0,
+            })
+            return
+
         if path in ("/v1.1/Counters/Increment", "/mobile/pbe", "/client/pbe",
                     "/v1.0/SequenceStatistics/BatchAddToSequencesV2",
-                    "/notifications/signalr/negotiate", "/v1.1/Counters/BatchIncrement",
+                    "/v1.1/Counters/BatchIncrement",
                     "/v2/push-notifications/register-android-native",
                     "/v1/performance/measurements"):
             self.empty_ok()
@@ -570,7 +692,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/device/initialize":
-            self.send_json({"browserTrackerId": 1234567890, "appDeviceIdentifier": None})
+            token = fake_session_token()
+            cookie = ".ROBLOSECURITY=" + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600"
+            cookie2 = ".PUPPYSECURITY=" + token + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600"
+            self.send_json(
+                {"browserTrackerId": 1234567890, "appDeviceIdentifier": None},
+                extra_headers=[("Set-Cookie", cookie), ("Set-Cookie", cookie2)],
+            )
             return
 
         if path == "/v1/login":
@@ -617,7 +745,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": 2,
                 "joinScriptUrl": base_url + "/Game/Join.ashx?jobId=" + js["jobId"],
                 "authenticationUrl": base_url + "/Login/Negotiate.ashx",
-                "authenticationTicket": "",
+                "authenticationTicket": self.auth_cookie(),
                 "message": "Server found (%s)" % js["jobId"],
                 "joinScript": js["signed"],
             })
@@ -793,22 +921,42 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(data)
             return
 
-        self.send_json_error(0, "Not found", 404)
+        self.send_json_error(0, "Not found: " + path, 404)
 
 
 def main():
     cfg = load_config()
     key = load_key()
     host = cfg.get("host", "0.0.0.0")
-    port = int(cfg.get("port", "8081"))
-    print("Serving on %s:%d (%s @%s), key=%s" % (host, port, cfg["fake_username"], cfg["fake_user_id"], KEY_PATH))
-    server = Server((host, port), cfg, key)
+    http_port = int(cfg.get("port", "80"))
+    https_port = int(cfg.get("https_port", "443"))
+    mitm_port = int(cfg.get("mitm_port", "8081"))
+    servers = []
+    ports = [http_port]
+    if mitm_port > 0 and mitm_port not in ports:
+        ports.append(mitm_port)
+    for port in ports:
+        server = Server((host, port), cfg, key)
+        server.daemon_threads = True
+        servers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print("Serving on %s:%d (%s @%s), key=%s" % (host, port, cfg["fake_username"], cfg["fake_user_id"], KEY_PATH))
+    if https_port > 0:
+        tls_context = build_tls_context()
+        https_server = Server((host, https_port), cfg, key)
+        https_server.daemon_threads = True
+        https_server.socket = tls_context.wrap_socket(https_server.socket, server_side=True)
+        servers.append(https_server)
+        threading.Thread(target=https_server.serve_forever, daemon=True).start()
+        print("HTTPS serving on %s:%d with %s" % (host, https_port, CERT_PATH))
     try:
-        server.serve_forever()
+        while True:
+            time.sleep(3600)
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        for server in servers:
+            server.server_close()
 
 
 if __name__ == "__main__":
