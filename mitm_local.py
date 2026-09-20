@@ -4,6 +4,12 @@ def request(flow: http.HTTPFlow) -> None:
     local_host = "localhost"
     local_port = 8081
 
+    if "assetdelivery.roblox.com" in flow.request.host:
+        return
+
+    if not (flow.request.host == "roblox.com" or flow.request.host.endswith(".roblox.com")):
+        return
+
     # Save the original host
     original_host = flow.request.host
 
