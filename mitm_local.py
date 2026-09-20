@@ -2,7 +2,7 @@ from mitmproxy import http
 
 def request(flow: http.HTTPFlow) -> None:
     local_host = "localhost"
-    local_port = 80
+    local_port = 8080
 
     # Save the original host
     original_host = flow.request.host
