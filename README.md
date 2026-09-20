@@ -68,7 +68,7 @@ Thats pretty much it for the PC part.
 
 3. Install or patch your desired CLIENT and open it. (Pre-patched clients are on the releases)
 
-4. **HERE COMES THE HARD PART** Open it and login, then if you see the blue dot going left and right again instead of a homescreen, close it and delete the app data **(yes you heard that right, wipe the app data)** and continue to next step.
+4. **HERE COMES THE HARD PART** Open it and login with any credentials if asked (if not skip this step), then if you see the blue dot going left and right again instead of a homescreen, close it and delete the app data **(yes you heard that right, wipe the app data)** and continue to next step.
 
 5. Open the rbxl website on your browser, you will see a blue "Go!" button, click it. If you see a grey "Joining server" screen followed by a failure to connect, the client has been setup successfully. Otherwise try logging in again and wiping the app data again and again and again, yeah this is the "bad time part".
 
