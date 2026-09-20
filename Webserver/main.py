@@ -1,8 +1,10 @@
 import base64
+import http.client
 import json
 import os
 import re
 import secrets
+import ssl
 import sys
 import time
 import uuid
@@ -28,6 +30,7 @@ CONFIG_KEYS = [
     ("membership", "None"),
     ("account_age_days", "1000"),
     ("country_code", "US"),
+    ("asseturl", "https://localhost:2005"),
 ]
 
 FAKE_UNIVERSE_ID = 1818
@@ -100,22 +103,15 @@ LAUNCHER_HTML = ('<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="v
 
 
 def load_config():
-    if not os.path.exists(CONFIG_PATH):
-        cfg = dict(CONFIG_KEYS)
-        cfg["fake_user_id"] = str(secrets.randbelow(900000000000) + 10000000000)
-        username = "Mobile" + f"{secrets.randbelow(10000):04d}"
-        cfg["fake_username"] = username
-        cfg["fake_display_name"] = username
-        with open(CONFIG_PATH, "w") as f:
-            for key, value in cfg.items():
-                f.write(f"{key}={value}\n")
+    dirty = not os.path.exists(CONFIG_PATH)
     cfg = {}
-    with open(CONFIG_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if "=" in line:
-                key, value = line.split("=", 1)
-                cfg[key.strip()] = value.strip()
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    cfg[key.strip()] = value.strip()
     defaults = dict(CONFIG_KEYS)
     defaults["fake_user_id"] = str(secrets.randbelow(900000000000) + 10000000000)
     username = "Mobile" + f"{secrets.randbelow(10000):04d}"
@@ -124,6 +120,11 @@ def load_config():
     for key, value in defaults.items():
         if key not in cfg or cfg[key] == "":
             cfg[key] = value
+            dirty = True
+    if dirty:
+        with open(CONFIG_PATH, "w") as f:
+            for key, value in cfg.items():
+                f.write(f"{key}={value}\n")
     cfg["fake_user_id"] = str(int(cfg["fake_user_id"]))
     cfg["server_port"] = int(cfg["server_port"])
     cfg["account_age_days"] = int(cfg["account_age_days"])
@@ -329,6 +330,33 @@ def read_json_file(name):
         return f.read()
 
 
+def unverified_tls_context():
+    for proto in (getattr(ssl, "PROTOCOL_TLS_CLIENT", None), getattr(ssl, "PROTOCOL_TLS", None), getattr(ssl, "PROTOCOL_SSLv23", None)):
+        if proto is None:
+            continue
+        try:
+            context = ssl.SSLContext(proto)
+            try:
+                context.check_hostname = False
+            except Exception:
+                pass
+            try:
+                context.verify_mode = ssl.CERT_NONE
+            except Exception:
+                pass
+            return context
+        except Exception:
+            continue
+    for name in ("_create_unverified_context", "create_unverified_context"):
+        factory = getattr(ssl, name, None)
+        if factory is not None:
+            try:
+                return factory()
+            except Exception:
+                continue
+    raise ConnectionError("ssl module unusable")
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -350,6 +378,40 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             return b""
         return self.rfile.read(length)
+
+    def fetch_upstream(self, base, method, target, data):
+        parsed = urlparse(base)
+        scheme = parsed.scheme or "https"
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if scheme == "https" else 80)
+        headers = {}
+        for name, value in self.headers.items():
+            low = name.lower()
+            if low in ("host", "content-length", "connection", "accept-encoding", "transfer-encoding"):
+                continue
+            headers[name] = value
+        errors = []
+        for use_tls in (scheme == "https", False):
+            try:
+                if use_tls:
+                    context = unverified_tls_context()
+                    try:
+                        context.minimum_version = ssl.TLSVersion.TLSv1
+                    except Exception:
+                        pass
+                    conn = http.client.HTTPSConnection(host, port, context=context, timeout=15)
+                else:
+                    conn = http.client.HTTPConnection(host, port, timeout=15)
+                try:
+                    conn.request(method, target, body=data or None, headers=headers)
+                    resp = conn.getresponse()
+                    body = resp.read()
+                    return body, resp.getheader("Content-Type"), resp.status
+                finally:
+                    conn.close()
+            except Exception as exc:
+                errors.append(str(exc))
+        raise ConnectionError(" / ".join(errors))
 
     def params(self):
         result = {}
@@ -573,18 +635,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path in ("/asset", "/v1/asset"):
-            params = self.params()
-            asset_id = params.get("id", self.headers.get("AssetId", "1818"))
-            if asset_id == "":
-                self.send_json_error(0, "Missing asset id", 400)
+            client_body = self.body()
+            asset_base = cfg.get("asseturl", "https://localhost:2005") or "https://localhost:2005"
+            asset_target = "/asset/" + (("?" + parsed.query) if parsed.query else "")
+            try:
+                data, ctype, status = self.fetch_upstream(asset_base, self.command, asset_target, client_body)
+            except Exception as exc:
+                sys.stderr.write("asset proxy error: %r\n" % (exc,))
+                self.send_json_error(0, "Asset upstream unreachable: %s" % (exc,), 502)
                 return
-            asset_path = os.path.join(ASSETS_DIR, asset_id)
-            if not os.path.isfile(asset_path):
-                self.send_bytes(404, "text/plain", b"Asset not found")
-                return
-            with open(asset_path, "rb") as f:
-                data = f.read()
-            self.send_bytes(200, "application/octet-stream", data)
+            self.send_bytes(status, ctype or "application/octet-stream", data)
             return
 
         if path == "/marketplace/productinfo":
