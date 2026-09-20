@@ -1,0 +1,2 @@
+## DISCONTINUED PROTOTYPE
+This is the prototype of the webserver emulator, it is here purely for archival porpuses, it does not support assets. Please do not use this one, we do not provide assistance for using it.

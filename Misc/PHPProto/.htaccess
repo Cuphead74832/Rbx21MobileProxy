@@ -1,0 +1,10 @@
+# Dummy replica webserver front controller.
+# Route everything that is not a real file or directory to index.php,
+# preserving the original request path and query string.
+
+RewriteEngine On
+RewriteBase /
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]

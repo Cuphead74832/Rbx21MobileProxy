@@ -1,0 +1,26 @@
+## ROBLOX MOBILE
+127.0.0.1 roblox.com
+127.0.0.1 www.roblox.com
+127.0.0.1 clientsettingscdn.roblox.com
+127.0.0.1 api.roblox.com
+127.0.0.1 locale.roblox.com
+127.0.0.1 abtesting.roblox.com
+127.0.0.1 ecsv2.roblox.com
+127.0.0.1 ephemeralcounters.api.roblox.com
+127.0.0.1 apis.roblox.com
+127.0.0.1 auth.roblox.com
+127.0.0.1 realtime.roblox.com
+127.0.0.1 chat.roblox.com
+127.0.0.1 accountsettings.roblox.com
+127.0.0.1 chat.roblox.com
+127.0.0.1 notifications.roblox.com
+127.0.0.1 metrics.roblox.com
+127.0.0.1 gamejoin.roblox.com
+127.0.0.1 assetgame.roblox.com
+127.0.0.1 thumbnails.roblox.com
+127.0.0.1 api.w.roblox.com
+127.0.0.1 fts.rbxcdn.com
+127.0.0.1 games.roblox.com
+127.0.0.1 assetdelivery.roblox.com
+## ROBLOX MOBILE END
+## IN ORDER TO RE-ESTABLISH CONNECTION WITH ROBLOX, REMOVE THESE LINES FROM HOSTS.

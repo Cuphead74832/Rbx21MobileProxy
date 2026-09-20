@@ -31,7 +31,6 @@ CONFIG_KEYS = [
     ("host", "0.0.0.0"),
     ("port", "80"),
     ("https_port", "443"),
-    ("mitm_port", "8081"),
     ("base_url", "http://www.roblox.com"),
     ("api_base_url", "http://api.roblox.com"),
     ("machine_address", "127.0.0.1"),
@@ -930,17 +929,12 @@ def main():
     host = cfg.get("host", "0.0.0.0")
     http_port = int(cfg.get("port", "80"))
     https_port = int(cfg.get("https_port", "443"))
-    mitm_port = int(cfg.get("mitm_port", "8081"))
     servers = []
-    ports = [http_port]
-    if mitm_port > 0 and mitm_port not in ports:
-        ports.append(mitm_port)
-    for port in ports:
-        server = Server((host, port), cfg, key)
-        server.daemon_threads = True
-        servers.append(server)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        print("Serving on %s:%d (%s @%s), key=%s" % (host, port, cfg["fake_username"], cfg["fake_user_id"], KEY_PATH))
+    http_server = Server((host, http_port), cfg, key)
+    http_server.daemon_threads = True
+    servers.append(http_server)
+    threading.Thread(target=http_server.serve_forever, daemon=True).start()
+    print("Serving on %s:%d (%s @%s), key=%s" % (host, http_port, cfg["fake_username"], cfg["fake_user_id"], KEY_PATH))
     if https_port > 0:
         tls_context = build_tls_context()
         https_server = Server((host, https_port), cfg, key)

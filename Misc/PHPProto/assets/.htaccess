@@ -1,0 +1,10 @@
+# Front-controller passthrough for the assets/ directory.
+# Real files (e.g. the place binary for the /asset handler) are served
+# directly; everything else under /assets/ (such as
+# /assets/{universeId}/versions) is forwarded to index.php.
+
+RewriteEngine On
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ /index.php [QSA,L]

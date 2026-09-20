@@ -1,0 +1,10 @@
+base_url=http://www.roblox.com
+api_base_url=http://api.roblox.com
+machine_address=127.0.0.1
+server_port=2005
+membership=None
+account_age_days=1000
+country_code=US
+fake_user_id=99321067172
+fake_username=Mobile8155
+fake_display_name=Mobile8155
